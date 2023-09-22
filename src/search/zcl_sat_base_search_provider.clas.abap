@@ -38,7 +38,6 @@ CLASS zcl_sat_base_search_provider DEFINITION
         tadir_type         TYPE string VALUE 'TADIR_TYPE',
         description        TYPE string VALUE 'DESCRIPTION',
         devclass           TYPE string VALUE 'DEVCLASS',
-        api_state          TYPE string VALUE 'API_STATE',
         cds_source_type    TYPE string VALUE 'CDS_SOURCE_TYPE',
         message_number     TYPE string VALUE 'MESSAGE_NUMBER',
         message_short_text TYPE string VALUE 'MESSAGE_SHORT_TEXT',
@@ -60,20 +59,20 @@ CLASS zcl_sat_base_search_provider DEFINITION
         changed_date       TYPE string VALUE 'CHANGED_DATE',
       END OF c_result_fields.
 
-    DATA mo_search_query             TYPE REF TO zif_sat_object_search_query.
-    DATA ms_search_engine_params     TYPE zif_sat_ty_object_search=>ty_s_search_engine_params.
-    DATA mt_result                   TYPE zif_sat_ty_object_search=>ty_t_search_result.
-    DATA mt_criteria                 TYPE zif_sat_ty_global=>ty_t_seltab_sql.
-    DATA mt_criteria_or              TYPE zif_sat_ty_global=>ty_t_or_seltab_sql.
-    DATA mt_criteria_and             TYPE zif_sat_ty_global=>ty_t_and_seltab_sql.
-    DATA mt_where                    TYPE string_table.
-    DATA mt_select                   TYPE string_table.
-    DATA mt_order_by                 TYPE string_table.
-    DATA mt_group_by                 TYPE string_table.
-    DATA mt_having                   TYPE string_table.
-    DATA mt_from                     TYPE TABLE OF string.
-    DATA ms_join_def                 TYPE zif_sat_ty_global=>ty_s_join_def.
-    DATA mf_excluding_found          TYPE abap_bool.
+    DATA mo_search_query TYPE REF TO zif_sat_object_search_query.
+    DATA ms_search_engine_params TYPE zif_sat_ty_object_search=>ty_s_search_engine_params.
+    DATA mt_result TYPE zif_sat_ty_object_search=>ty_t_search_result.
+    DATA mt_criteria TYPE zif_sat_ty_global=>ty_t_seltab_sql.
+    DATA mt_criteria_or TYPE zif_sat_ty_global=>ty_t_or_seltab_sql.
+    DATA mt_criteria_and TYPE zif_sat_ty_global=>ty_t_and_seltab_sql.
+    DATA mt_where TYPE string_table.
+    DATA mt_select TYPE string_table.
+    DATA mt_order_by TYPE string_table.
+    DATA mt_group_by TYPE string_table.
+    DATA mt_having TYPE string_table.
+    DATA mt_from TYPE TABLE OF string.
+    DATA ms_join_def TYPE zif_sat_ty_global=>ty_s_join_def.
+    DATA mf_excluding_found TYPE abap_bool.
     DATA mv_description_filter_field TYPE string.
 
     "! <p class="shorttext synchronized">Start new criteria table connected with OR</p>
@@ -229,14 +228,6 @@ CLASS zcl_sat_base_search_provider DEFINITION
       RAISING
         zcx_sat_object_search.
 
-    "! <p class="shorttext synchronized">Create filter for API option</p>
-    METHODS add_api_option_filter
-      IMPORTING
-        it_values          TYPE zif_sat_ty_object_search=>ty_t_value_range
-        iv_ref_field       TYPE fieldname
-        iv_ref_table_alias TYPE string
-        it_tadir_type      TYPE trobjtype_tab.
-
     "! <p class="shorttext synchronized">Creates filter for application component</p>
     METHODS add_appl_comp_filter
       IMPORTING
@@ -252,9 +243,16 @@ CLASS zcl_sat_base_search_provider DEFINITION
         iv_ref_field         TYPE fieldname
         iv_ref_table_alias   TYPE string.
 
+    METHODS add_package_filter
+      IMPORTING
+        it_values    TYPE zif_sat_ty_object_search=>ty_t_value_range
+        iv_fieldname TYPE string.
+
     METHODS reset.
 
   PRIVATE SECTION.
+    TYPES ty_package_range TYPE RANGE OF devclass.
+
     CONSTANTS c_devc_tab_alias TYPE string VALUE 'devclass'.
 
     DATA mf_devclass_join_added TYPE abap_bool.
@@ -279,6 +277,12 @@ CLASS zcl_sat_base_search_provider DEFINITION
         if_use_ddic_sql_view TYPE abap_bool OPTIONAL
         iv_ref_table_alias   TYPE string
         iv_ref_field         TYPE fieldname.
+
+    METHODS resolve_package_hierarchy
+      IMPORTING
+        it_values     TYPE zif_sat_ty_object_search=>ty_t_value_range
+      RETURNING
+        VALUE(result) TYPE zif_sat_ty_object_search=>ty_t_value_range.
 ENDCLASS.
 
 
@@ -339,63 +343,6 @@ CLASS zcl_sat_base_search_provider IMPLEMENTATION.
     ENDTRY.
   ENDMETHOD.
 
-  METHOD add_api_option_filter.
-    CONSTANTS c_api_alias TYPE string VALUE 'api' ##NO_TEXT.
-
-    DATA lt_api_filters   TYPE zif_sat_ty_object_search=>ty_t_value_range.
-    DATA lt_state_filters TYPE zif_sat_ty_object_search=>ty_t_value_range.
-
-    DATA(lf_single_tadir_type) = xsdbool( lines( it_tadir_type ) = 1 ).
-
-    DATA(lt_conditions) = VALUE zsat_join_condition_data_t( ( field           = 'objectname'
-                                                              ref_field       = iv_ref_field
-                                                              ref_table_alias = iv_ref_table_alias
-                                                              type            = zif_sat_c_join_cond_type=>field ) ).
-
-    IF lf_single_tadir_type = abap_true.
-      lt_conditions = VALUE #( BASE lt_conditions
-                               ( field         = 'objecttype'
-                                 tabname_alias = CONV #( c_api_alias )
-                                 value         = it_tadir_type[ 1 ]
-                                 type          = zif_sat_c_join_cond_type=>filter ) ).
-    ENDIF.
-
-    add_join_table( iv_join_table = |{ zif_sat_c_select_source_id=>zsat_i_apistates }|
-                    iv_alias      = c_api_alias
-                    it_conditions = lt_conditions ).
-
-    LOOP AT it_values INTO DATA(ls_value).
-
-      CASE ls_value-low.
-
-        WHEN zif_sat_c_object_search=>c_api_option_value-released OR
-             zif_sat_c_object_search=>c_api_option_value-deprecated.
-          lt_state_filters = VALUE #( BASE lt_state_filters ( ls_value ) ).
-
-        WHEN OTHERS.
-          lt_api_filters = VALUE #( BASE lt_api_filters ( ls_value ) ).
-      ENDCASE.
-
-    ENDLOOP.
-
-    IF lf_single_tadir_type = abap_false.
-      add_option_filter( iv_fieldname = |{ c_api_alias }~objecttype|
-                         it_values    = VALUE #( FOR type IN it_tadir_type
-                                                 ( sign = 'I' option = 'EQ' low = type ) ) ).
-    ENDIF.
-
-    IF lt_api_filters IS NOT INITIAL.
-
-      add_option_filter( iv_fieldname = |{ c_api_alias }~filtervalue|
-                         it_values    = lt_api_filters ).
-    ENDIF.
-
-    IF lt_state_filters IS NOT INITIAL.
-      add_option_filter( iv_fieldname = |{ c_api_alias }~apistate|
-                         it_values    = lt_state_filters ).
-    ENDIF.
-  ENDMETHOD.
-
   METHOD add_appl_comp_filter.
     CHECK it_values IS NOT INITIAL.
 
@@ -416,6 +363,11 @@ CLASS zcl_sat_base_search_provider IMPLEMENTATION.
 
     add_option_filter( iv_fieldname = |{ c_devc_tab_alias }~softwarecomponent|
                        it_values    = it_values ).
+  ENDMETHOD.
+
+  METHOD add_package_filter.
+    add_option_filter( iv_fieldname = iv_fieldname
+                       it_values    = resolve_package_hierarchy( it_values = it_values ) ).
   ENDMETHOD.
 
   METHOD add_filter.
@@ -787,5 +739,27 @@ CLASS zcl_sat_base_search_provider IMPLEMENTATION.
                                                  type            = zif_sat_c_join_cond_type=>field ) ) ).
       mf_devclass_join_added = abap_true.
     ENDIF.
+  ENDMETHOD.
+
+  METHOD resolve_package_hierarchy.
+    result = VALUE #( FOR range IN it_values
+                      WHERE ( option = zif_sat_c_options=>contains_pattern )
+                      ( range ) ).
+
+    LOOP AT it_values ASSIGNING FIELD-SYMBOL(<ls_value_range>) WHERE option <> zif_sat_c_options=>contains_pattern.
+      cl_pak_package_queries=>get_all_subpackages( EXPORTING  im_package             = CONV #( <ls_value_range>-low )
+                                                              im_also_local_packages = abap_true
+                                                   IMPORTING  et_subpackages         = DATA(lt_subpackages)
+                                                   EXCEPTIONS OTHERS                 = 1 ).
+
+      result = VALUE #( BASE result
+                        ( sign   = <ls_value_range>-sign
+                          option = zif_sat_c_options=>equals
+                          low    = <ls_value_range>-low )
+                        ( LINES OF VALUE #( FOR subpackage IN lt_subpackages
+                                            ( sign   = <ls_value_range>-sign
+                                              option = zif_sat_c_options=>equals
+                                              low    = subpackage-package ) ) ) ).
+    ENDLOOP.
   ENDMETHOD.
 ENDCLASS.
